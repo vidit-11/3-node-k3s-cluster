@@ -1,0 +1,16 @@
+global:
+  domain: argocd.192.168.1.10.nip.io   # nip.io resolves this to 192.168.1.10
+
+configs:
+  params:
+    server.insecure: true   # Traefik terminates TLS- Argo CD serves plain HTTP inside the cluster
+
+server:
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+      traefik.ingress.kubernetes.io/router.tls: "true"
+      traefik.ingress.kubernetes.io/router.middlewares: argocd-lan-only@kubernetescrd
+    tls: true               # uses the secret "argocd-server-tls" (created from the mkcert cert)
