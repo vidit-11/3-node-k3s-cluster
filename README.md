@@ -24,7 +24,7 @@ This document records how the platform was built, how it is configured, the prob
 12. [CI/CD: current vs proposed](#12-cicd-current-vs-proposed)
 13. [Troubleshooting log](#13-troubleshooting-log)
 14. [Known gaps and roadmap](#14-known-gaps-and-roadmap)
-15. [Day-2 operations cheat sheet](#15-day-2-operations-cheat-sheet)
+15. [Operations cheat sheet](#15-day-2-operations-cheat-sheet)
 
 ---
 
