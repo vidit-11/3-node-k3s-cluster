@@ -6,10 +6,31 @@ This document records how the platform was built, how it is configured, the prob
 
 > **Placeholders:** environment-specific values are replaced with `<…>` placeholders (`<PUBLIC_STATIC_IP>`, `<github-org>`, `<gitops-repo>`, `<dockerhub-namespace>`, `<ssh-user>`, `<infisical-project-slug>`, `<router-admin-url>`). `myproject` and `auth-backend` are example names. LAN addresses (`192.168.1.x`) are private, non-routable examples.
 
+## Repository layout
+
+```
+.
+├── ansible/
+│   ├── ansible.cfg
+│   ├── inventory.example.yml     # copy to inventory.yml (git-ignored)
+│   └── prep.yml                  # OS prep for the nodes (§5)
+├── platform/
+│   ├── traefik-config.yaml       # Traefik as DaemonSet, real client IPs (§7.1)
+│   ├── lan-only.yml              # IP allowlist for admin UIs (§7.2)
+│   ├── infisical-values.example.yaml   # copy to infisical-values.yaml (§8)
+│   └── argocd-values.yaml        # (§9)
+└── gitops/
+    ├── argocd/auth-backend.yml   # Argo CD Application (§10.3)
+    └── auth-backend/             # Helm chart for the sample service (§10, §11)
+```
+
+Files ending in `.example.*` hold placeholders. Copy them without the `.example` part and fill in real values; the copies are git-ignored.
+
 ---
 
 ## Contents
 
+0. [Repository layout](#repository-layout)
 1. [Architecture](#1-architecture)
 2. [Inventory: hardware, network and versions](#2-inventory-hardware-network-and-versions)
 3. [Network and router setup](#3-network-and-router-setup)
@@ -205,7 +226,7 @@ ansible-galaxy collection install community.general
 ansible-galaxy collection install git+https://github.com/k3s-io/k3s-ansible.git
 ```
 
-### 5.2 Project folder `~/k3s-ansible`
+### 5.2 Ansible files (`ansible/`)
 
 **ansible.cfg**
 
@@ -216,7 +237,7 @@ interpreter_python = auto_silent
 host_key_checking = True
 ```
 
-**inventory.yml** (token redacted)
+**inventory.yml**, created from `inventory.example.yml` (token redacted)
 
 ```yaml
 k3s_cluster:
@@ -264,7 +285,8 @@ ansible-vault encrypt_string "$(openssl rand -hex 32)" --name token
 ### 5.3 Run
 
 ```sh
-cd ~/k3s-ansible
+cd ansible
+cp inventory.example.yml inventory.yml     # then fill in the <…> values
 ansible all -m ping --ask-vault-pass
 ansible-playbook prep.yml --ask-become-pass --ask-vault-pass
 ansible-playbook k3s.orchestration.site --ask-become-pass --ask-vault-pass
@@ -272,7 +294,7 @@ ansible-playbook k3s.orchestration.site --ask-become-pass --ask-vault-pass
 
 The collection initialises etcd on k3s-1, joins k3s-2 and k3s-3 as servers, waits for all three to become etcd voters and merges a kubeconfig into `~/.kube/config` on the control PC (context `k3s-ansible`).
 
-Keep `~/k3s-ansible` in a private Git repository. The token is vault-encrypted, so the repo is safe to store.
+`inventory.yml` is git-ignored. The token in it is vault-encrypted, but the file also holds the SSH user and public IP.
 
 ---
 
@@ -319,7 +341,7 @@ Result: the scheduler placed one pod per node and the nginx page loaded on all t
 
 ### 7.1 Traefik configuration
 
-k3s ships Traefik as its ingress controller. It is customised with a `HelmChartConfig` (`~/k3s-ansible/traefik-config.yaml`):
+k3s ships Traefik as its ingress controller. It is customised with a `HelmChartConfig` (`platform/traefik-config.yaml`):
 
 ```yaml
 apiVersion: helm.cattle.io/v1
@@ -340,14 +362,14 @@ spec:
 
 ### 7.2 Keeping admin tools private
 
-Once 80/443 were forwarded, Infisical and Argo CD became reachable from the internet by spoofing the `Host` header. Both are restricted to the LAN and in-cluster traffic with a Traefik middleware (`~/k3s-ansible/lan-only.yml`), one per namespace:
+Once 80/443 were forwarded, Infisical and Argo CD became reachable from the internet by spoofing the `Host` header. Both are restricted to the LAN and in-cluster traffic with a Traefik middleware (`platform/lan-only.yml`), one per namespace:
 
 ```yaml
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: lan-only
-  namespace: infisical          # second copy with namespace: argocd
+  namespace: infisical          # the file has a second copy for argocd
 spec:
   ipAllowList:
     sourceRange:
@@ -409,13 +431,14 @@ kubectl create secret generic infisical-secrets -n infisical \
   --from-literal=AUTH_SECRET=<openssl rand -base64 32> \
   --from-literal=SITE_URL=https://infisical.192.168.1.10.nip.io
 
+cp platform/infisical-values.example.yaml platform/infisical-values.yaml   # set the passwords
 helm install infisical infisical-helm-charts/infisical-standalone \
-  -n infisical -f infisical-values.yaml --version 1.11.1
+  -n infisical -f platform/infisical-values.yaml --version 1.11.1
 ```
 
 **`ENCRYPTION_KEY` must be stored in a password manager.** It encrypts Infisical's root key; a database restored without it is unreadable.
 
-### 8.2 `infisical-values.yaml` (passwords redacted)
+### 8.2 `platform/infisical-values.example.yaml`
 
 ```yaml
 infisical:
@@ -450,7 +473,7 @@ redis:
     password: <48-char hex>
 ```
 
-Database passwords must be **hex only**: they are embedded in connection URLs, where characters like `#`, `@`, `/` break parsing (see [Issue 10](#12-troubleshooting-log)). Keep this file out of Git or encrypt it with `ansible-vault`.
+Database passwords must be **hex only**: they are embedded in connection URLs, where characters like `#`, `@`, `/` break parsing (see [Issue 10](#12-troubleshooting-log)). The filled-in `infisical-values.yaml` is git-ignored.
 
 ### 8.3 Post-install
 
@@ -502,10 +525,11 @@ helm repo add argo https://argoproj.github.io/argo-helm
 helm repo update
 kubectl create namespace argocd
 kubectl create secret tls argocd-server-tls -n argocd --cert=<argocd cert>.pem --key=<argocd key>.pem
-helm install argocd argo/argo-cd -n argocd -f argocd-values.yaml --version 10.10.5
+kubectl apply -f platform/lan-only.yml
+helm install argocd argo/argo-cd -n argocd -f platform/argocd-values.yaml --version 10.10.5
 ```
 
-**argocd-values.yaml**
+**platform/argocd-values.yaml**
 
 ```yaml
 global:
@@ -559,26 +583,24 @@ The sample `guestbook` app from `argoproj/argocd-example-apps` was deployed and 
 
 ## 10. Deploying an application: auth-backend
 
-### 10.1 Repository layout
+### 10.1 Chart layout
 
-Repo: `<github-org>/<gitops-repo>` (private)
+In this repo the GitOps files live under `gitops/`. In the running setup they are in a separate private repo (`<github-org>/<gitops-repo>`) that Argo CD watches.
 
 ```
-<gitops-repo>/
+gitops/
 ├── argocd/
 │   └── auth-backend.yml          # Argo CD Application
-└── auth-backend/
-    └── auth-backend/                # Helm chart
-        ├── Chart.yaml
-        ├── values.yaml
-        └── templates/
-            ├── _helpers.tpl
-            ├── deployment.yaml
-            ├── service.yaml
-            └── infisical-secret.yaml
+└── auth-backend/                 # Helm chart
+    ├── Chart.yaml
+    ├── values.yaml
+    └── templates/
+        ├── deployment.yaml
+        ├── service.yaml
+        └── infisical-secrets.yaml
 ```
 
-The packaged `.tgz` and `index.yaml` files are not needed: Argo CD reads the chart folder directly from Git.
+The templates take every name from `.Values.name` and the namespace from `.Release.Namespace`, so the chart has no hardcoded service names. The packaged `.tgz` and `index.yaml` files are not needed: Argo CD reads the chart folder directly from Git.
 
 ### 10.2 Image pull secret
 
@@ -592,7 +614,7 @@ kubectl create secret docker-registry dockerhub-cred -n myproject \
   --docker-password=<read-only-token>
 ```
 
-### 10.3 Argo CD Application (`argocd/auth-backend.yml`)
+### 10.3 Argo CD Application (`gitops/argocd/auth-backend.yml`)
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -605,7 +627,7 @@ spec:
   source:
     repoURL: git@github.com:<github-org>/<gitops-repo>.git
     targetRevision: main
-    path: auth-backend/auth-backend
+    path: gitops/auth-backend
     helm:
       valueFiles:
         - values.yaml
@@ -620,14 +642,23 @@ spec:
       - CreateNamespace=true
 ```
 
-Applied once with `kubectl apply -f argocd/auth-backend.yml`. After that, every push to `main` that changes the chart is deployed automatically (polling interval about 3 minutes; force with `argocd app get auth-backend --grpc-web --refresh`).
+Applied once with `kubectl apply -f gitops/argocd/auth-backend.yml`. After that, every push to `main` that changes the chart is deployed automatically (polling interval about 3 minutes; force with `argocd app get auth-backend --grpc-web --refresh`).
 
 ### 10.4 Key chart values
 
 ```yaml
-name: auth-backend          # required by the Deployment template
-namespace: myproject
+name: auth-backend             # used for every resource name
 replicaCount: 1
+revisionHistoryLimit: 2
+minReadySeconds: 25
+terminationGracePeriodSeconds: 60
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0          # never drop below the current replica count
+
 image:
   repository: <dockerhub-namespace>/auth-backend
   tag: latest                  # to be replaced by immutable :sha tags (see §13)
@@ -635,6 +666,26 @@ image:
 imagePullSecrets:
   - name: dockerhub-cred
 containerPort: 8080
+
+startupProbe:
+  httpGet:
+    path: /actuator/health/liveness
+    port: http
+  periodSeconds: 5
+  failureThreshold: 36         # up to 3 min for Spring Boot to start
+readinessProbe:
+  httpGet:
+    path: /actuator/health/readiness
+    port: http
+  periodSeconds: 10
+livenessProbe:
+  httpGet:
+    path: /actuator/health/liveness
+    port: http
+  periodSeconds: 20
+
+preStopSleepSeconds: 20        # let Traefik drop the pod before Spring shuts down
+
 service:
   type: ClusterIP
   port: 80
@@ -642,15 +693,18 @@ service:
     prometheus.io/scrape: "true"
     prometheus.io/port: "80"
     prometheus.io/path: "/actuator/prometheus"
+
 resources: {}                  # to be filled in
 ```
+
+The probes use Spring Boot's actuator health groups. The startup probe gives the JVM time to boot, after which readiness controls traffic and liveness restarts a hung pod. The preStop hook uses Kubernetes' built-in `sleep` action, so the image does not need a `sleep` binary.
 
 The Deployment template loads app configuration with:
 
 ```yaml
 envFrom:
   - secretRef:
-      name: {{ .Values.name }}-env   # created by the Infisical Operator
+      name: {{ .Values.name }}-env   # managed by the Infisical Operator
       optional: true
 ```
 
@@ -659,8 +713,8 @@ and carries the annotation `secrets.infisical.com/auto-reload: "true"` so pods r
 ### 10.5 Validate before pushing
 
 ```sh
-helm lint auth-backend/auth-backend
-helm template auth-backend auth-backend/auth-backend --namespace myproject
+helm lint gitops/auth-backend
+helm template auth-backend gitops/auth-backend --namespace myproject
 ```
 
 Argo CD can only deploy what `helm template` can render. Add both commands as a CI check on pull requests.
@@ -703,7 +757,7 @@ kubectl create secret generic infisical-universal-auth -n myproject \
 
 Folders exist per environment: a folder created in Staging does not exist in Development.
 
-### 11.4 Chart template (`templates/infisical-secret.yaml`)
+### 11.4 Chart template (`templates/infisical-secrets.yaml`)
 
 ```yaml
 {{- if .Values.infisical.enabled }}
@@ -881,8 +935,8 @@ kubectl rollout restart deployment <name> -n <namespace>
 
 # Helm releases
 helm list -A
-helm upgrade infisical infisical-helm-charts/infisical-standalone -n infisical -f infisical-values.yaml --version 1.11.1
-helm upgrade argocd argo/argo-cd -n argocd -f argocd-values.yaml --version 10.10.5
+helm upgrade infisical infisical-helm-charts/infisical-standalone -n infisical -f platform/infisical-values.yaml --version 1.11.1
+helm upgrade argocd argo/argo-cd -n argocd -f platform/argocd-values.yaml --version 10.10.5
 ```
 
 **Rules of thumb**
@@ -891,4 +945,4 @@ helm upgrade argocd argo/argo-cd -n argocd -f argocd-values.yaml --version 10.10
 2. Pin every chart and image version; upgrade deliberately and back up first.
 3. Never commit secret values; only `InfisicalSecret` references.
 4. Add the `lan-only` middleware to every internal tool's ingress.
-5. Keep `~/k3s-ansible`, the values files (encrypted) and this README in a private repository.
+5. Commit only the `.example` files; keep the filled-in inventory and values files out of Git.
