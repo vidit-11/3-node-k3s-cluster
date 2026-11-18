@@ -23,18 +23,23 @@ imagePullSecrets:
 containerPort: 8080
 
 startupProbe:
-  tcpSocket:
-    port: 8080
-  initialDelaySeconds: 30
+  httpGet:
+    path: /actuator/health/liveness
+    port: http
+  periodSeconds: 5
+  failureThreshold: 36        # up to 3 min for Spring Boot to start
+
+readinessProbe:
+  httpGet:
+    path: /actuator/health/readiness
+    port: http
   periodSeconds: 10
-  failureThreshold: 15
 
 livenessProbe:
-  tcpSocket:
-    port: 8080
-  initialDelaySeconds: 45
-  periodSeconds: 15
-  failureThreshold: 3
+  httpGet:
+    path: /actuator/health/liveness
+    port: http
+  periodSeconds: 20
 
 preStopSleepSeconds: 20
 
