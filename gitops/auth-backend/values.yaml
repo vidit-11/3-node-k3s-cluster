@@ -1,0 +1,58 @@
+name: auth-backend
+namespace: myproject
+
+replicaCount: 1
+revisionHistoryLimit: 2
+minReadySeconds: 25
+terminationGracePeriodSeconds: 60
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+image:
+  repository: <dockerhub-namespace>/auth-backend
+  tag: latest
+  pullPolicy: Always
+
+imagePullSecrets:
+  - name: dockerhub-cred
+
+containerPort: 8080
+
+startupProbe:
+  tcpSocket:
+    port: 8080
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  failureThreshold: 15
+
+livenessProbe:
+  tcpSocket:
+    port: 8080
+  initialDelaySeconds: 45
+  periodSeconds: 15
+  failureThreshold: 3
+
+preStopSleepSeconds: 20
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "80"
+    prometheus.io/path: "/actuator/prometheus"
+
+resources: {}
+
+infisical:
+  enabled: true
+  hostAPI: http://infisical-infisical-standalone-infisical.infisical.svc.cluster.local:8080/api
+  resyncInterval: 60
+  projectSlug: <infisical-project-slug>
+  envSlug: dev
+  secretsPath: /auth-backend
+  credentialsSecret: infisical-universal-auth
