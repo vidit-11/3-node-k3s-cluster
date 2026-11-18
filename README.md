@@ -21,10 +21,9 @@ This document records how the platform was built, how it is configured, the prob
 9. [Argo CD (GitOps)](#9-argo-cd-gitops)
 10. [Deploying an application: auth-backend](#10-deploying-an-application-auth-backend)
 11. [Infisical Operator integration](#11-infisical-operator-integration)
-12. [CI/CD: current vs proposed](#12-cicd-current-vs-proposed)
-13. [Troubleshooting log](#13-troubleshooting-log)
-14. [Known gaps and roadmap](#14-known-gaps-and-roadmap)
-15. [Operations cheat sheet](#15-day-2-operations-cheat-sheet)
+12. [Troubleshooting log](#12-troubleshooting-log)
+13. [Known gaps and roadmap](#13-known-gaps-and-roadmap)
+14. [Operations cheat sheet](#14-operations-cheat-sheet)
 
 ---
 
@@ -89,7 +88,7 @@ All nodes run **Ubuntu 26.04.1 LTS** (Desktop), kernel 7.0.0-38-generic, wired E
 | LAN | 192.168.1.0/24, gateway 192.168.1.1 |
 | Port forwards | TCP 80 and 443 → 192.168.1.10 |
 | Reserved static range | 192.168.1.2 – 192.168.1.99 (after DHCP pool change, see §3.3) |
-| Planned floating IPs | 192.168.1.20 – 192.168.1.29 (MetalLB, see §14) |
+| Planned floating IPs | 192.168.1.20 – 192.168.1.29 (MetalLB, see §13) |
 
 ### Software versions
 
@@ -150,7 +149,7 @@ The router does **not support NAT loopback (hairpin NAT)**. From inside the LAN,
 
 ### 4.1 Static LAN IPs
 
-Ubuntu Desktop manages networking with **NetworkManager**, so static IPs are set with `nmcli` (netplan with the default `networkd` renderer does not work here, see [Issue 2](#13-troubleshooting-log)).
+Ubuntu Desktop manages networking with **NetworkManager**, so static IPs are set with `nmcli` (netplan with the default `networkd` renderer does not work here, see [Issue 2](#12-troubleshooting-log)).
 
 ```sh
 nmcli con show                       # ethernet connection is "netplan-enp1s0"
@@ -281,7 +280,7 @@ Keep `~/k3s-ansible` in a private Git repository. The token is vault-encrypted, 
 
 ### 6.1 Control PC
 
-The control PC previously ran a separate single-node k3s. Its bundled kubectl ignored `~/.kube/config`. It was removed and a standalone kubectl installed (see [Issue 7](#13-troubleshooting-log)):
+The control PC previously ran a separate single-node k3s. Its bundled kubectl ignored `~/.kube/config`. It was removed and a standalone kubectl installed (see [Issue 7](#12-troubleshooting-log)):
 
 ```fish
 sudo /usr/local/bin/k3s-uninstall.sh
@@ -451,7 +450,7 @@ redis:
     password: <48-char hex>
 ```
 
-Database passwords must be **hex only**: they are embedded in connection URLs, where characters like `#`, `@`, `/` break parsing (see [Issue 10](#13-troubleshooting-log)). Keep this file out of Git or encrypt it with `ansible-vault`.
+Database passwords must be **hex only**: they are embedded in connection URLs, where characters like `#`, `@`, `/` break parsing (see [Issue 10](#12-troubleshooting-log)). Keep this file out of Git or encrypt it with `ansible-vault`.
 
 ### 8.3 Post-install
 
@@ -631,7 +630,7 @@ namespace: myproject
 replicaCount: 1
 image:
   repository: <dockerhub-namespace>/auth-backend
-  tag: latest                  # to be replaced by immutable :sha tags (see §12)
+  tag: latest                  # to be replaced by immutable :sha tags (see §13)
   pullPolicy: Always
 imagePullSecrets:
   - name: dockerhub-cred
@@ -781,61 +780,7 @@ flowchart LR
 
 ---
 
-## 12. CI/CD: current vs proposed
-
-### 12.1 Current: push-based
-
-```mermaid
-flowchart TB
-    push[git push → main] --> build[docker build<br/>GitHub-hosted runner]
-    build --> dpush[docker push<br/>:latest + :sha]
-    dpush --> kube[Load kubeconfig<br/>from GitHub secrets]
-    kube --> setimg[kubectl set image<br/>CI → k3s API]
-    setimg --> cluster[Staging k3s]
-```
-
-Weak points: cluster admin credentials stored in GitHub; the Kubernetes API must be reachable from the internet; only the image changes through CI, so manifests and hand-edited config drift from Git.
-
-### 12.2 Proposed: pull-based GitOps
-
-```mermaid
-flowchart TB
-    push[git push → main] --> test[Test + docker build]
-    test --> dpush[docker push<br/>immutable :sha]
-    dpush --> bump[Commit image.tag<br/>to GitOps repo]
-    bump --> repo[(GitOps repo<br/>Helm chart + values)]
-    repo --> argocd[Argo CD sync<br/>in cluster]
-    argocd --> roll[Rolling update<br/>new :sha pods]
-    infisical[(Infisical)] --> op[Infisical Operator] --> roll
-```
-
-| | Current (push) | Proposed (GitOps) |
-|---|---|---|
-| Who changes the cluster | GitHub Actions via `kubectl` | Argo CD from inside the cluster |
-| Cluster credentials in CI | Full kubeconfig | None (Git write access only) |
-| Kubernetes API exposed | Required | Not needed |
-| Source of truth | Partly Git, partly the server | Git |
-| Manual changes | Persist unnoticed | Reverted by self-heal |
-| Rollback | Re-run old pipeline | `git revert` of the tag commit |
-| Secrets | Config files edited by hand | Infisical via operator |
-| Image tags | `:latest` + `:sha` | `:sha` only |
-
-### 12.3 Workflow changes required
-
-1. **Build job:** drop `:latest`, push only `:<short-sha>`; add tests before the build and a Trivy scan before push; use `cache-to: type=gha,mode=max` for multi-stage builds; add OCI labels (`org.opencontainers.image.revision`).
-2. **Deploy job:** replace `kubectl set image` with a job that checks out the GitOps repo, sets `image.tag` in the service's `values.yaml`, commits and pushes (with a `git pull --rebase` retry loop for concurrent builds).
-3. **Secrets:** remove `K3S_KUBECONFIG` from GitHub; add a token limited to pushing to the GitOps repo.
-
-### 12.4 Repository strategy (decided)
-
-- **One GitOps repo per project** (e.g. a project with ~25 services), not one per service.
-- **Helm** for the services: one shared chart, per-service values files, generated with an ApplicationSet (matrix of services × environments).
-- **Kustomize** acceptable for small one-off setups.
-- Shared chart starts inside the GitOps repo; once shared across projects, publish it as an OCI artifact to Docker Hub (paid plan, private repositories) and pin versions.
-
----
-
-## 13. Troubleshooting log
+## 12. Troubleshooting log
 
 Every issue hit during the build, in order.
 
@@ -880,7 +825,7 @@ Every issue hit during the build, in order.
 
 ---
 
-## 14. Known gaps and roadmap
+## 13. Known gaps and roadmap
 
 | Priority | Gap | Risk | Plan |
 |---|---|---|---|
@@ -888,7 +833,7 @@ Every issue hit during the build, in order.
 | High | No backups of Infisical DB or etcd off-node | Unrecoverable failure | Scheduled `pg_dump` and k3s etcd snapshots to MinIO/S3; keep `ENCRYPTION_KEY` separately; test a restore |
 | High | DHCP pool overlap | IP conflicts with nodes | Restrict pool (§3.3) |
 | Medium | Port forward targets one node (k3s-1) | Public access lost if k3s-1 is down | **MetalLB** floating IP `192.168.1.20`, then repoint forwards and move hostnames to `.20.nip.io` |
-| Medium | `:latest` image tags | Argo CD cannot detect new builds | Immutable `:sha` tags + CI tag-bump commits (§12) |
+| Medium | `:latest` image tags | Argo CD cannot detect new builds | Immutable `:sha` tags, with CI committing the new tag to the GitOps repo |
 | Medium | Nodes join via 192.168.1.10 | New joins fail if k3s-1 is down | kube-vip floating IP for the API |
 | Medium | Per-namespace pull secrets | Repetition across 25 services | Docker Hub credentials in `/etc/rancher/k3s/registries.yaml` via Ansible |
 | Medium | Universal Auth client secret stored in cluster | Long-lived credential | Switch operator to Kubernetes Auth |
@@ -896,11 +841,10 @@ Every issue hit during the build, in order.
 | Low | Single CoreDNS replica | ~5 min DNS gap on node loss | Acceptable for PoC |
 | Low | No UPS | Power cuts can corrupt etcd | UPS for nodes and router |
 | Low | No real domain | No public HTTPS, NAT loopback issue | Domain + cert-manager (Let's Encrypt) + split DNS |
-| Low | Docker also installed on k3s-1 | Extra load | Move CI into the cluster (Actions Runner Controller) |
 
 ---
 
-## 15. operations cheat sheet
+## 14. Operations cheat sheet
 
 ```sh
 # Cluster health
@@ -943,7 +887,7 @@ helm upgrade argocd argo/argo-cd -n argocd -f argocd-values.yaml --version 10.10
 
 **Rules of thumb**
 
-1. Change application deployments only through Git, Argo CD reverts manual edits.
+1. Change application deployments only through Git; Argo CD reverts manual edits.
 2. Pin every chart and image version; upgrade deliberately and back up first.
 3. Never commit secret values; only `InfisicalSecret` references.
 4. Add the `lan-only` middleware to every internal tool's ingress.
