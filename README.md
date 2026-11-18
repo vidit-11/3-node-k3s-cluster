@@ -887,7 +887,6 @@ Every issue hit during the build, in order.
 | High | Node-local storage (local-path); Infisical PostgreSQL pinned to k3s-3 | Disk or node loss loses all secrets | Install **Longhorn** (replicated volumes); move PostgreSQL onto it |
 | High | No backups of Infisical DB or etcd off-node | Unrecoverable failure | Scheduled `pg_dump` and k3s etcd snapshots to MinIO/S3; keep `ENCRYPTION_KEY` separately; test a restore |
 | High | DHCP pool overlap | IP conflicts with nodes | Restrict pool (§3.3) |
-| High | Credentials displayed during setup (terminal output, screenshots) | Leaked secrets | Rotate DB passwords (via `ALTER USER`), Docker Hub tokens, Infisical client secrets |
 | Medium | Port forward targets one node (k3s-1) | Public access lost if k3s-1 is down | **MetalLB** floating IP `192.168.1.20`, then repoint forwards and move hostnames to `.20.nip.io` |
 | Medium | `:latest` image tags | Argo CD cannot detect new builds | Immutable `:sha` tags + CI tag-bump commits (§12) |
 | Medium | Nodes join via 192.168.1.10 | New joins fail if k3s-1 is down | kube-vip floating IP for the API |
@@ -898,7 +897,6 @@ Every issue hit during the build, in order.
 | Low | No UPS | Power cuts can corrupt etcd | UPS for nodes and router |
 | Low | No real domain | No public HTTPS, NAT loopback issue | Domain + cert-manager (Let's Encrypt) + split DNS |
 | Low | Docker also installed on k3s-1 | Extra load | Move CI into the cluster (Actions Runner Controller) |
-| Low | Remote admin access | — | Tailscale; never forward 6443 |
 
 ---
 
