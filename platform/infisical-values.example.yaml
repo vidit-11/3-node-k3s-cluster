@@ -1,0 +1,29 @@
+infisical:
+  replicaCount: 1                 
+  kubeSecretRef: infisical-secrets # holds ENCRYPTION_KEY, AUTH_SECRET, SITE_URL
+
+ingress:
+  enabled: true
+  hostName: infisical.192.168.1.10.nip.io   # nip.io resolves this to 192.168.1.10
+  ingressClassName: traefik                  
+  nginx:
+    enabled: false                           
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: infisical-lan-only@kubernetescrd
+  tls:
+    - secretName: infisical-tls
+      hosts:
+        - infisical.192.168.1.10.nip.io
+postgresql:
+  enabled: true                    # bundled PostgreSQL
+  auth:
+    username: infisical
+    password: <infisical-db-password>
+    database: infisicalDB
+
+redis:
+  enabled: true                    # bundled Redis
+  auth:
+    password: <redis-password>
