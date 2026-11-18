@@ -1,0 +1,54 @@
+# OS prep for the k3s nodes. Static IPs must already be set.
+# ansible-playbook prep.yml --ask-become-pass --ask-vault-pass
+
+- name: Prep nodes
+  hosts: k3s_cluster
+  become: true
+  tasks:
+    - name: Set hostname
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Fix 127.0.1.1 entry
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1\s'
+        line: "127.0.1.1 {{ inventory_hostname }}"
+
+    - name: Add nodes to /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '\s{{ item }}$'
+        line: "{{ hostvars[item].ansible_host }} {{ item }}"
+      loop: "{{ groups['k3s_cluster'] }}"
+
+    - name: Enable NTP
+      ansible.builtin.command: timedatectl set-ntp true
+      changed_when: false
+
+    - name: Install curl
+      ansible.builtin.apt:
+        name: curl
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Get ufw status
+      ansible.builtin.command: ufw status
+      register: ufw_status
+      changed_when: false
+      failed_when: false
+
+    - name: Open k3s ports
+      community.general.ufw:
+        rule: allow
+        src: "{{ item.src }}"
+        port: "{{ item.port | default(omit) }}"
+        proto: "{{ item.proto | default(omit) }}"
+      loop:
+        - { src: 192.168.1.0/24, port: "6443", proto: tcp }       # API
+        - { src: 192.168.1.0/24, port: "2379:2380", proto: tcp }  # etcd
+        - { src: 192.168.1.0/24, port: "10250", proto: tcp }      # kubelet
+        - { src: 192.168.1.0/24, port: "8472", proto: udp }       # flannel
+        - { src: 10.42.0.0/16 }                                   # pods
+        - { src: 10.43.0.0/16 }                                   # services
+      when: "'Status: active' in ufw_status.stdout"
