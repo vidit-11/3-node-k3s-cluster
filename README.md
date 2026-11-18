@@ -6,8 +6,6 @@ This document records how the platform was built, how it is configured, the prob
 
 > **Placeholders:** environment-specific values are replaced with `<…>` placeholders (`<PUBLIC_STATIC_IP>`, `<github-org>`, `<gitops-repo>`, `<dockerhub-namespace>`, `<ssh-user>`, `<infisical-project-slug>`, `<router-admin-url>`). `myproject` and `auth-backend` are example names. LAN addresses (`192.168.1.x`) are private, non-routable examples.
 
-> **Status:** Proof of concept. Suitable for internal tools, CI workloads and test environments. Not yet ready for production data (see [Known gaps](#14-known-gaps-and-roadmap)).
-
 ---
 
 ## Contents
